@@ -1,7 +1,7 @@
 """Git history proof repair mining pipeline.
 
 This module extracts proof repair challenges from the curve25519-dalek-lean-verify
-git history by identifying commits where definition changes broke existing proofs.
+git history by identifying commits where sorry placeholders were filled with actual proofs.
 """
 
 import logging
@@ -11,15 +11,15 @@ from git import Repo
 from git.exc import GitCommandError
 
 from git_history_proof_engineering_eval.config import Config, setup_logging
-from git_history_proof_engineering_eval.file_classifier import classify_file, should_exclude_path
+from git_history_proof_engineering_eval.file_classifier import find_filled_sorries, should_exclude_path
 from git_history_proof_engineering_eval.git_ops import (
     get_commit_iterator,
+    get_file_content_at_commit,
     get_file_diff,
     get_modified_files,
-    restore_file_from_parent,
     safe_checkout,
 )
-from git_history_proof_engineering_eval.jsonl_writer import write_challenges
+from git_history_proof_engineering_eval.jsonl_writer import append_challenge
 from git_history_proof_engineering_eval.metrics import (
     format_progress,
     print_candidates,
@@ -27,25 +27,24 @@ from git_history_proof_engineering_eval.metrics import (
 )
 from git_history_proof_engineering_eval.snapshot import capture_codebase_snapshot
 from git_history_proof_engineering_eval.structures import Challenge, CommitCandidate, MiningResult
-from git_history_proof_engineering_eval.verification import is_verification_error, run_lake_build
 
 logger = logging.getLogger(__name__)
 
 
 def identify_candidates(repo: Repo, config: Config) -> list[CommitCandidate]:
-    """Phase A: Identify commits that modify both definitions and proofs.
+    """Phase A: Identify commits where sorries were filled with actual proofs.
 
     Args:
         repo: GitPython repository object.
         config: Configuration object.
 
     Returns:
-        List of candidate commits.
+        List of candidate commits with filled_sorries info.
     """
     candidates = []
     processed = 0
 
-    logger.info("Phase A: Identifying candidate commits")
+    logger.info("Phase A: Identifying commits where sorries were filled")
 
     for commit in get_commit_iterator(Path(repo.working_dir), config.mining.start_ref):
         processed += 1
@@ -60,59 +59,57 @@ def identify_candidates(repo: Repo, config: Config) -> list[CommitCandidate]:
                 f"Processed {processed} commits, found {len(candidates)} candidates"
             )
 
+        # Skip commits without parents (initial commit)
+        if not commit.parents:
+            continue
+
+        parent = commit.parents[0]
+
         # Get modified files
         current_files, _ = get_modified_files(commit)
 
-        # Filter out excluded paths
+        # Filter out excluded paths and non-.lean files
         current_files = [
             f
             for f in current_files
             if not should_exclude_path(f, config.filtering.exclude_paths)
+            and str(f).endswith(".lean")
         ]
 
         if not current_files:
             continue
 
-        # Classify files
-        definition_files = []
-        proof_files = []
-
-        repo_path = Path(repo.working_dir)
+        # Check each modified file for filled sorries
+        filled_sorries: dict[Path, list] = {}
 
         for file_path in current_files:
-            full_path = repo_path / file_path
-            if not full_path.exists():
-                # File might be deleted in this commit
+            # Get file content at parent and child
+            parent_content = get_file_content_at_commit(repo, parent, file_path)
+            child_content = get_file_content_at_commit(repo, commit, file_path)
+
+            if parent_content is None or child_content is None:
                 continue
 
-            classification = classify_file(full_path)
+            # Find sorries that were filled in this commit
+            sorries = find_filled_sorries(parent_content, child_content)
 
-            if classification.is_definition:
-                definition_files.append(file_path)
+            if sorries:
+                filled_sorries[file_path] = sorries
 
-            if classification.is_proof:
-                # Check minimum thresholds
-                if (
-                    classification.theorem_count >= config.filtering.min_theorem_count
-                    or classification.lemma_count >= config.filtering.min_theorem_count
-                    or classification.tactic_block_count
-                    >= config.filtering.min_tactic_blocks
-                ):
-                    proof_files.append(file_path)
-
-        # Candidate must modify both definitions and proofs
-        if definition_files and proof_files:
+        # If any sorries were filled, this is a candidate
+        if filled_sorries:
+            total_filled = sum(len(s) for s in filled_sorries.values())
             candidate = CommitCandidate(
                 commit_hash=commit.hexsha,
                 commit_message=commit.message.strip(),
                 author=str(commit.author),
                 date=commit.committed_datetime,
-                definition_files=definition_files,
-                proof_files=proof_files,
+                filled_sorries=filled_sorries,
             )
             candidates.append(candidate)
             logger.info(
-                f"Found candidate: {commit.hexsha[:8]} - {commit.message.strip()[:50]}"
+                f"Found candidate: {commit.hexsha[:8]} - {total_filled} sorry(s) filled - "
+                f"{commit.message.strip()[:40]}"
             )
 
     logger.info(
@@ -124,7 +121,12 @@ def identify_candidates(repo: Repo, config: Config) -> list[CommitCandidate]:
 def validate_candidate(
     repo: Repo, candidate: CommitCandidate, config: Config
 ) -> list[Challenge]:
-    """Phase B: Validate a candidate by creating broken state and testing.
+    """Phase B: Create challenges from filled sorries.
+
+    Creates one challenge per filled sorry. The challenge captures:
+    - Codebase at parent commit (containing sorry)
+    - Diff showing how the sorry was filled
+    - Specific sorry location info
 
     Args:
         repo: GitPython repository object.
@@ -132,79 +134,54 @@ def validate_candidate(
         config: Configuration object.
 
     Returns:
-        List of valid challenges (one per proof file that breaks), or empty list if none.
+        List of challenges (one per filled sorry).
     """
     challenges = []
     repo_path = Path(repo.working_dir)
-
-    # Checkout the "fixed" state (commit C)
-    if not safe_checkout(repo, candidate.commit_hash):
-        logger.warning(f"Failed to checkout {candidate.commit_hash}")
-        return challenges
-
     commit = repo.commit(candidate.commit_hash)
+    parent = commit.parents[0]
 
-    # Try each proof file
-    for proof_file in candidate.proof_files:
-        logger.debug(f"Testing proof file: {proof_file}")
+    # Create challenges for each filled sorry
+    for file_path, sorry_list in candidate.filled_sorries.items():
+        # Get the diff for this file
+        file_diff = get_file_diff(repo, commit, file_path)
 
-        # First, verify that the fixed state actually builds successfully
-        # (We need this as a baseline to know if reverting breaks it)
-        result_fixed = run_lake_build(
-            repo_path, proof_file, config.verification.timeout_seconds
-        )
+        # Create module name for verification command
+        module_name = str(file_path).replace("/", ".").replace(".lean", "")
+        verification_command = f"lake build {module_name}"
 
-        if not result_fixed.success:
-            logger.debug(
-                f"Proof file {proof_file} doesn't build in fixed state, skipping"
-            )
-            continue
-
-        # Restore proof file to parent state (create "broken" state)
-        if not restore_file_from_parent(repo, commit, proof_file):
-            logger.warning(f"Failed to restore {proof_file} from parent")
-            continue
-
-        # Run Lake build on broken state
-        result_broken = run_lake_build(
-            repo_path, proof_file, config.verification.timeout_seconds
-        )
-
-        # Check if this is a valid verification error
-        if not result_broken.success and is_verification_error(result_broken.stderr):
-            logger.info(
-                f"Valid challenge found: {candidate.commit_hash[:8]} - {proof_file}"
-            )
-
-            # Get the diff showing the fix
-            author_fix_diff = get_file_diff(repo, commit, proof_file)
-
-            # Capture codebase snapshot (all Lean files for MVP)
-            codebase_snapshot = capture_codebase_snapshot(repo_path)
-
-            # Create module name for verification command
-            module_name = str(proof_file).replace("/", ".").replace(".lean", "")
-            verification_command = f"lake build {module_name}"
-
-            # Generate task_id
-            file_name = Path(proof_file).stem
-            task_id = f"{candidate.commit_hash[:8]}_{file_name}"
+        for sorry in sorry_list:
+            # Generate task_id from commit and declaration name
+            decl_name = sorry.enclosing_decl or "anon"
+            task_id = f"{candidate.commit_hash[:8]}_{decl_name}"
 
             challenge = Challenge(
                 task_id=task_id,
                 commit_hash=candidate.commit_hash,
-                proof_file=proof_file,
-                definition_files=candidate.definition_files,
-                author_fix_diff=author_fix_diff,
-                error_message=result_broken.error_message or "Unknown error",
-                codebase_snapshot=codebase_snapshot,
+                proof_file=file_path,
+                sorry_location=sorry,
+                author_fix_diff=file_diff,
+                error_message=f"sorry in {decl_name}",
                 verification_command=verification_command,
             )
-
             challenges.append(challenge)
 
-        # Restore proof file back to fixed state for next iteration
-        safe_checkout(repo, candidate.commit_hash)
+            logger.info(
+                f"Challenge created: {task_id} - {sorry.enclosing_decl or 'anonymous'} "
+                f"at line {sorry.line}"
+            )
+
+    # Checkout parent and capture snapshot (codebase with sorries)
+    if challenges:
+        if not safe_checkout(repo, parent.hexsha):
+            logger.warning(f"Failed to checkout parent {parent.hexsha}")
+            return []
+
+        codebase_snapshot = capture_codebase_snapshot(repo_path)
+
+        # Attach snapshot to all challenges from this candidate
+        for challenge in challenges:
+            challenge.codebase_snapshot = codebase_snapshot
 
     return challenges
 
@@ -274,6 +251,12 @@ def run_mining(
     # Phase B: Validate and package
     logger.info("Phase B: Validating candidates and packaging challenges")
 
+    # Initialize output file (clear any existing content)
+    output_path = config.output.jsonl_path
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text("")  # Clear/create empty file
+    logger.info(f"Output file initialized: {output_path}")
+
     all_challenges = []
     skipped_reasons: dict[str, int] = {}
 
@@ -290,11 +273,14 @@ def run_mining(
             challenges = validate_candidate(repo, candidate, config)
 
             if challenges:
+                # Write challenges incrementally as they're found
+                for challenge in challenges:
+                    append_challenge(challenge, output_path)
                 all_challenges.extend(challenges)
                 logger.info(f"  Found {len(challenges)} challenge(s)")
                 print(f"  Found {len(challenges)} challenge(s)")
             else:
-                reason = "no_verification_error"
+                reason = "no_challenges"
                 skipped_reasons[reason] = skipped_reasons.get(reason, 0) + 1
                 logger.debug(f"  Skipped: {reason}")
 
@@ -303,13 +289,9 @@ def run_mining(
             reason = "exception"
             skipped_reasons[reason] = skipped_reasons.get(reason, 0) + 1
 
-    # Write output
+    # Final summary
     if all_challenges:
-        logger.info(
-            f"Writing {len(all_challenges)} challenges to {config.output.jsonl_path}"
-        )
-        write_challenges(all_challenges, config.output.jsonl_path)
-        print(f"\nWrote {len(all_challenges)} challenges to {config.output.jsonl_path}")
+        print(f"\nWrote {len(all_challenges)} challenges to {output_path}")
 
     # Build result
     result = MiningResult(

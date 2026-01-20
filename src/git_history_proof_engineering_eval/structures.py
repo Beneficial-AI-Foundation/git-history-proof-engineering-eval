@@ -1,20 +1,29 @@
 """Data structures for the git history mining pipeline."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
 
 @dataclass
+class SorryLocation:
+    """Location of a sorry that was filled in."""
+
+    line: int  # 1-indexed line number
+    column: int  # 0-indexed column
+    context: str  # The line containing the sorry
+    enclosing_decl: str | None  # Name of enclosing theorem/lemma/def
+
+
+@dataclass
 class CommitCandidate:
-    """A commit that modifies both definition and proof files."""
+    """A commit where sorries were filled with actual proofs."""
 
     commit_hash: str
     commit_message: str
     author: str
     date: datetime
-    definition_files: list[Path]
-    proof_files: list[Path]
+    filled_sorries: dict[Path, list[SorryLocation]]  # file -> sorries filled in that file
 
 
 @dataclass
@@ -32,14 +41,14 @@ class VerificationResult:
 class Challenge:
     """A valid proof repair challenge extracted from git history."""
 
-    task_id: str  # Format: "{commit_hash}_{file_name}"
+    task_id: str  # Format: "{commit_hash[:8]}_{decl_name}"
     commit_hash: str
     proof_file: Path
-    definition_files: list[Path]
-    author_fix_diff: str
-    error_message: str
-    codebase_snapshot: dict[str, str]  # file_path -> content
-    verification_command: str
+    sorry_location: SorryLocation  # Specific sorry to fill
+    author_fix_diff: str  # Diff showing how sorry was filled
+    error_message: str  # "sorry in {decl_name}"
+    codebase_snapshot: dict[str, str] = field(default_factory=dict)  # Captured at PARENT (with sorry)
+    verification_command: str = ""  # "lake build Module.Name"
 
 
 @dataclass

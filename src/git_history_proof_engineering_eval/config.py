@@ -2,6 +2,7 @@
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 import tomllib
@@ -131,16 +132,23 @@ def load_config(path: Path | None = None) -> Config:
     return _config
 
 
-def setup_logging(config: Config) -> None:
+def setup_logging(config: Config) -> Path:
     """Setup logging based on configuration.
 
     Args:
         config: Configuration object with logging settings.
+
+    Returns:
+        Path to the log file created.
     """
     log_dir = config.output.log_dir
     log_dir.mkdir(parents=True, exist_ok=True)
 
     log_level = getattr(logging, config.logging.level.upper())
+
+    # Create timestamped log filename
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = log_dir / f"mining_{timestamp}.log"
 
     # Create formatters
     formatter = logging.Formatter(
@@ -148,7 +156,7 @@ def setup_logging(config: Config) -> None:
     )
 
     # File handler
-    file_handler = logging.FileHandler(log_dir / "mining.log")
+    file_handler = logging.FileHandler(log_file)
     file_handler.setLevel(log_level)
     file_handler.setFormatter(formatter)
 
@@ -162,3 +170,5 @@ def setup_logging(config: Config) -> None:
     root_logger.setLevel(log_level)
     root_logger.addHandler(file_handler)
     root_logger.addHandler(console_handler)
+
+    return log_file

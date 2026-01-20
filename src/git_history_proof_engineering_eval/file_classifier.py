@@ -1,8 +1,10 @@
-"""File classification for Lean files - detect definition vs proof files."""
+"""File classification for Lean files - detect definition vs proof files and sorries."""
 
 import re
 from dataclasses import dataclass
 from pathlib import Path
+
+from git_history_proof_engineering_eval.structures import SorryLocation
 
 
 @dataclass
@@ -120,3 +122,60 @@ def should_exclude_path(file_path: Path, exclude_patterns: list[str]) -> bool:
     """
     path_str = str(file_path)
     return any(pattern in path_str for pattern in exclude_patterns)
+
+
+def find_sorries(content: str) -> list[SorryLocation]:
+    """Find all sorry/admit locations in content.
+
+    Args:
+        content: Lean file content as string.
+
+    Returns:
+        List of SorryLocation objects for each sorry found.
+    """
+    sorries = []
+    lines = content.split("\n")
+    current_decl: str | None = None
+
+    for i, line in enumerate(lines, 1):
+        # Track enclosing declaration (theorem, lemma, or def)
+        decl_match = re.search(r"\b(theorem|lemma|def)\s+(\w+)", line)
+        if decl_match:
+            current_decl = decl_match.group(2)
+
+        # Find sorries on this line
+        for match in re.finditer(r"\b(sorry|admit)\b", line):
+            sorries.append(
+                SorryLocation(
+                    line=i,
+                    column=match.start(),
+                    context=line.strip(),
+                    enclosing_decl=current_decl,
+                )
+            )
+
+    return sorries
+
+
+def find_filled_sorries(parent_content: str, child_content: str) -> list[SorryLocation]:
+    """Find sorries in parent that were filled in child (by declaration context).
+
+    Args:
+        parent_content: Lean file content at parent commit.
+        child_content: Lean file content at child commit.
+
+    Returns:
+        List of SorryLocation objects from parent where the enclosing declaration
+        no longer has sorries in child.
+    """
+    parent_sorries = find_sorries(parent_content)
+    child_sorries = find_sorries(child_content)
+
+    # Group by enclosing declaration
+    child_decl_sorries = {s.enclosing_decl for s in child_sorries if s.enclosing_decl}
+    parent_decl_sorries = {s.enclosing_decl for s in parent_sorries if s.enclosing_decl}
+
+    # Sorries are "filled" if the declaration no longer has sorries in child
+    filled_decls = parent_decl_sorries - child_decl_sorries
+
+    return [s for s in parent_sorries if s.enclosing_decl in filled_decls]

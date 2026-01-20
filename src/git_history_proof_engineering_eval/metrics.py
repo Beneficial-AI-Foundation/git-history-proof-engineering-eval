@@ -14,26 +14,32 @@ def print_candidates(candidates: list[CommitCandidate]) -> None:
         candidates: List of candidate commits found.
     """
     print("\n" + "=" * 70)
-    print("CANDIDATE COMMITS")
+    print("CANDIDATE COMMITS (sorry → proof transitions)")
     print("=" * 70)
 
     for i, candidate in enumerate(candidates, 1):
+        total_sorries = sum(len(s) for s in candidate.filled_sorries.values())
         print(f"\n[{i}] {candidate.commit_hash[:8]} - {candidate.commit_message[:60]}")
         print(f"    Author: {candidate.author}")
         print(f"    Date: {candidate.date}")
-        print(f"    Definition files ({len(candidate.definition_files)}):")
-        for df in candidate.definition_files[:3]:  # Show first 3
-            print(f"      - {df}")
-        if len(candidate.definition_files) > 3:
-            print(f"      ... and {len(candidate.definition_files) - 3} more")
-        print(f"    Proof files ({len(candidate.proof_files)}):")
-        for pf in candidate.proof_files[:3]:  # Show first 3
-            print(f"      - {pf}")
-        if len(candidate.proof_files) > 3:
-            print(f"      ... and {len(candidate.proof_files) - 3} more")
+        print(f"    Filled sorries: {total_sorries}")
+
+        # Show files and declarations with filled sorries
+        for file_path, sorries in list(candidate.filled_sorries.items())[:3]:
+            decls = [s.enclosing_decl or "anon" for s in sorries]
+            print(f"      - {file_path}: {', '.join(decls[:3])}")
+            if len(decls) > 3:
+                print(f"        ... and {len(decls) - 3} more declarations")
+
+        if len(candidate.filled_sorries) > 3:
+            print(f"      ... and {len(candidate.filled_sorries) - 3} more files")
 
     print("\n" + "=" * 70)
     print(f"Total candidates: {len(candidates)}")
+    total_sorries_all = sum(
+        sum(len(s) for s in c.filled_sorries.values()) for c in candidates
+    )
+    print(f"Total filled sorries: {total_sorries_all}")
     print("=" * 70)
 
 
