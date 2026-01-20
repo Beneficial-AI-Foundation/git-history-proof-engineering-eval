@@ -1,0 +1,29 @@
+[project]
+name = "git-history-proof-engineering-eval"
+version = "0.1.0"
+description = "Extract proof repair challenges from git history"
+readme = "README.md"
+authors = [
+    { name = "Quinn Dougherty", email = "quinn@for-all.dev" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "gitpython>=3.1.40",
+    "pydantic>=2.12.5",
+    "typer>=0.21.1",
+]
+
+[project.scripts]
+mine = "git_history_proof_engineering_eval.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.9.22,<0.10.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "hypothesis>=6.150.2",
+    "pytest>=9.0.2",
+    "ruff>=0.14.13",
+    "ty>=0.0.12",
+]
