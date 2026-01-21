@@ -57,9 +57,15 @@ def print_mining_summary(result: MiningResult) -> None:
     print(f"Candidates found:     {result.candidates}")
     print(f"Valid challenges:     {result.valid_challenges}")
 
+    # Discovery rate: what % of commits had sorry→proof transitions
+    if result.total_commits > 0:
+        discovery_rate = (result.candidates / result.total_commits) * 100
+        print(f"Discovery rate:       {discovery_rate:.1f}% of commits were candidates")
+
+    # Yield: average challenges per candidate commit
     if result.candidates > 0:
-        success_rate = (result.valid_challenges / result.candidates) * 100
-        print(f"Success rate:         {success_rate:.1f}%")
+        yield_rate = result.valid_challenges / result.candidates
+        print(f"Yield:                {yield_rate:.1f} challenges per candidate")
 
     if result.skipped_reasons:
         print("\nSkipped reasons:")

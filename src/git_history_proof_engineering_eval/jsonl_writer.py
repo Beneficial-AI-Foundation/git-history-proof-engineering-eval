@@ -29,7 +29,7 @@ def format_challenge_jsonl(challenge: Challenge) -> dict:
       },
       "setup": {
         "instructions": "Fill in the sorry placeholder...",
-        "codebase_state": {...}
+        "codebase_state": [{"path": "...", "content": "..."}]  # List format for HF datasets
       },
       "verification": {
         "command": "lake build [Module.Name]",
@@ -65,9 +65,11 @@ def format_challenge_jsonl(challenge: Challenge) -> dict:
                 "context": challenge.sorry_location.context,
                 "enclosing_decl": challenge.sorry_location.enclosing_decl,
             },
+            "manifest_hash": challenge.manifest_hash,
         },
         "setup": {
             "instructions": instructions,
+            # List format ensures homogeneous schema for HuggingFace datasets
             "codebase_state": challenge.codebase_snapshot,
         },
         "verification": {

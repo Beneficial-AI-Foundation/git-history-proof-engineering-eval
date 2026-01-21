@@ -1,0 +1,17 @@
+{
+  "summary": {
+    "total": 1,
+    "passed": 0,
+    "failed": 1,
+    "errors": 0,
+    "pass_rate": 0.0
+  },
+  "results": [
+    {
+      "task_id": "a7ca79fb_sqrt_ratio_i_spec",
+      "success": false,
+      "error": null,
+      "build_stderr": "Build timed out"
+    }
+  ]
+}

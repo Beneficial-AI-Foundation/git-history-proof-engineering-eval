@@ -11,3 +11,6 @@ wheels/
 
 logs/
 artifacts/
+eval_artifacts/
+lake_caches/
+.env

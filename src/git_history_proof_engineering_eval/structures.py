@@ -23,7 +23,9 @@ class CommitCandidate:
     commit_message: str
     author: str
     date: datetime
-    filled_sorries: dict[Path, list[SorryLocation]]  # file -> sorries filled in that file
+    filled_sorries: dict[
+        Path, list[SorryLocation]
+    ]  # file -> sorries filled in that file
 
 
 @dataclass
@@ -47,8 +49,11 @@ class Challenge:
     sorry_location: SorryLocation  # Specific sorry to fill
     author_fix_diff: str  # Diff showing how sorry was filled
     error_message: str  # "sorry in {decl_name}"
-    codebase_snapshot: dict[str, str] = field(default_factory=dict)  # Captured at PARENT (with sorry)
+    codebase_snapshot: list[dict[str, str]] = field(
+        default_factory=list
+    )  # List of {"path": ..., "content": ...} for HF datasets compatibility
     verification_command: str = ""  # "lake build Module.Name"
+    manifest_hash: str = ""  # SHA256 of lake-manifest.json for cache selection
 
 
 @dataclass

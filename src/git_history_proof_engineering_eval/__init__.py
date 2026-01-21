@@ -4,14 +4,19 @@ This module extracts proof repair challenges from the curve25519-dalek-lean-veri
 git history by identifying commits where sorry placeholders were filled with actual proofs.
 """
 
+import hashlib
 import logging
+from datetime import datetime
 from pathlib import Path
 
 from git import Repo
 from git.exc import GitCommandError
 
 from git_history_proof_engineering_eval.config import Config, setup_logging
-from git_history_proof_engineering_eval.file_classifier import find_filled_sorries, should_exclude_path
+from git_history_proof_engineering_eval.file_classifier import (
+    find_filled_sorries,
+    should_exclude_path,
+)
 from git_history_proof_engineering_eval.git_ops import (
     get_commit_iterator,
     get_file_content_at_commit,
@@ -26,9 +31,29 @@ from git_history_proof_engineering_eval.metrics import (
     print_mining_summary,
 )
 from git_history_proof_engineering_eval.snapshot import capture_codebase_snapshot
-from git_history_proof_engineering_eval.structures import Challenge, CommitCandidate, MiningResult
+from git_history_proof_engineering_eval.structures import (
+    Challenge,
+    CommitCandidate,
+    MiningResult,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def compute_manifest_hash(repo_path: Path) -> str:
+    """Compute SHA256 hash of lake-manifest.json for cache keying.
+
+    Args:
+        repo_path: Path to repository root.
+
+    Returns:
+        First 12 chars of SHA256 hash, or empty string if manifest doesn't exist.
+    """
+    manifest_path = repo_path / "lake-manifest.json"
+    if not manifest_path.exists():
+        return ""
+    content = manifest_path.read_bytes()
+    return hashlib.sha256(content).hexdigest()[:12]
 
 
 def identify_candidates(repo: Repo, config: Config) -> list[CommitCandidate]:
@@ -178,10 +203,15 @@ def validate_candidate(
             return []
 
         codebase_snapshot = capture_codebase_snapshot(repo_path)
+        manifest_hash = compute_manifest_hash(repo_path)
 
-        # Attach snapshot to all challenges from this candidate
+        # Attach snapshot and manifest hash to all challenges from this candidate
         for challenge in challenges:
             challenge.codebase_snapshot = codebase_snapshot
+            challenge.manifest_hash = manifest_hash
+
+        if manifest_hash:
+            logger.debug(f"Manifest hash for {parent.hexsha[:8]}: {manifest_hash}")
 
     return challenges
 
@@ -251,11 +281,13 @@ def run_mining(
     # Phase B: Validate and package
     logger.info("Phase B: Validating candidates and packaging challenges")
 
-    # Initialize output file (clear any existing content)
-    output_path = config.output.jsonl_path
+    # Create timestamped output file
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base_path = config.output.jsonl_path
+    output_path = base_path.parent / f"challenges_{timestamp}.jsonl"
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text("")  # Clear/create empty file
-    logger.info(f"Output file initialized: {output_path}")
+    output_path.write_text("")  # Create empty file
+    logger.info(f"Output file: {output_path}")
 
     all_challenges = []
     skipped_reasons: dict[str, int] = {}
