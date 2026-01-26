@@ -156,6 +156,7 @@ def build_cache_for_commit(
     # Run lake build
     timeout_msg = f"timeout={timeout}s" if timeout > 0 else "no timeout"
     log(f"  Running: lake build ({timeout_msg})...")
+    build_failed = False
     try:
         result = subprocess.run(
             ["lake", "build"],
@@ -166,8 +167,9 @@ def build_cache_for_commit(
         )
         log(f"  lake build returned: {result.returncode}")
         if result.returncode != 0:
-            log(f"  stderr: {result.stderr[:500]}")
-            return manifest_hash, False, f"lake build failed: {result.stderr[:200]}"
+            log(f"  stderr (truncated): {result.stderr[:500]}")
+            # Don't return early - cache is still valid even with build errors
+            build_failed = True
     except subprocess.TimeoutExpired:
         log("  TIMEOUT!")
         return manifest_hash, False, "lake build timed out"
@@ -178,7 +180,7 @@ def build_cache_for_commit(
 
     log(f"  .lake exists at {lake_dir}")
 
-    # Copy .lake to cache
+    # Copy .lake to cache (even if build had errors - deps are still cached)
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache_lake = cache_dir / ".lake"
     log(f"  Copying to {cache_lake}...")
@@ -189,10 +191,11 @@ def build_cache_for_commit(
 
     # Verify copy worked
     if cache_lake.exists():
+        status = "built (with errors)" if build_failed else "built successfully"
         log(f"  SUCCESS: Cached to {cache_lake}")
+        return manifest_hash, True, status
     else:
         return manifest_hash, False, f"copytree succeeded but {cache_lake} doesn't exist"
-    return manifest_hash, True, "built successfully"
 
 
 @app.command()
@@ -254,6 +257,14 @@ def build(
     results = []
 
     for expected_hash, commit in commit_list:
+        # Early check: if we know the expected hash, check cache before checkout
+        if expected_hash:
+            cache_dir = output_dir / expected_hash / ".lake"
+            if cache_dir.exists():
+                log(f"Cache exists for {expected_hash} (commit {commit[:8]}), skipping")
+                results.append((commit, expected_hash, True, "already exists"))
+                continue
+
         manifest_hash, success, msg = build_cache_for_commit(
             repo, commit, output_dir, timeout
         )
