@@ -44,7 +44,8 @@ class Challenge:
     """A valid proof repair challenge extracted from git history."""
 
     task_id: str  # Format: "{commit_hash[:8]}_{decl_name}"
-    commit_hash: str
+    commit_hash: str  # Child commit where sorry was filled
+    parent_commit: str  # Parent commit where sorry exists (codebase snapshot source)
     proof_file: Path
     sorry_location: SorryLocation  # Specific sorry to fill
     author_fix_diff: str  # Diff showing how sorry was filled
@@ -53,7 +54,7 @@ class Challenge:
         default_factory=list
     )  # List of {"path": ..., "content": ...} for HF datasets compatibility
     verification_command: str = ""  # "lake build Module.Name"
-    manifest_hash: str = ""  # SHA256 of lake-manifest.json for cache selection
+    manifest_hash: str = ""  # SHA256 of lake-manifest.json (from parent commit)
 
 
 @dataclass

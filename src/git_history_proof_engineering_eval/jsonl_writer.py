@@ -56,6 +56,7 @@ def format_challenge_jsonl(challenge: Challenge) -> dict:
         "task_id": challenge.task_id,
         "metadata": {
             "original_commit": challenge.commit_hash,
+            "parent_commit": challenge.parent_commit,
             "author_fix_diff": challenge.author_fix_diff,
             "error_message": challenge.error_message,
             "proof_file": str(challenge.proof_file),

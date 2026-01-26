@@ -183,6 +183,7 @@ def validate_candidate(
             challenge = Challenge(
                 task_id=task_id,
                 commit_hash=candidate.commit_hash,
+                parent_commit=parent.hexsha,
                 proof_file=file_path,
                 sorry_location=sorry,
                 author_fix_diff=file_diff,
